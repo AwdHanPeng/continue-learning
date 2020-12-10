@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from base import InputChoice,LayerChoice,MutableScope
+from nni.nas.pytorch import mutables
 from .ops import FactorizedReduce, StdConv, SepConvBN, Pool
 
 
@@ -37,9 +37,9 @@ class AuxiliaryHead(nn.Module):
 class Cell(nn.Module):
     def __init__(self, cell_name, prev_labels, channels):
         super().__init__()
-        self.input_choice = InputChoice(choose_from=prev_labels, n_chosen=1, return_mask=True,
+        self.input_choice = mutables.InputChoice(choose_from=prev_labels, n_chosen=1, return_mask=True,
                                                  key=cell_name + "_input")
-        self.op_choice = LayerChoice([
+        self.op_choice = mutables.LayerChoice([
             SepConvBN(channels, channels, 3, 1),
             SepConvBN(channels, channels, 5, 2),
             Pool("avg", 3, 1, 1),
@@ -53,7 +53,7 @@ class Cell(nn.Module):
         return cell_out, chosen_mask
 
 
-class Node(MutableScope):
+class Node(mutables.MutableScope):
     def __init__(self, node_name, prev_node_names, channels):
         super().__init__(node_name)
         self.cell_x = Cell(node_name + "_x", prev_node_names, channels)
@@ -97,7 +97,7 @@ class ENASLayer(nn.Module):
         self.num_nodes = num_nodes
         name_prefix = "reduce" if reduction else "normal"
         self.nodes = nn.ModuleList()
-        node_labels = [InputChoice.NO_KEY, InputChoice.NO_KEY]
+        node_labels = [mutables.InputChoice.NO_KEY, mutables.InputChoice.NO_KEY]
         for i in range(num_nodes):
             node_labels.append("{}_node_{}".format(name_prefix, i))
             self.nodes.append(Node(node_labels[-1], node_labels[:-1], out_channels))

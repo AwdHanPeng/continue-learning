@@ -11,8 +11,8 @@ import torch.nn as nn
 import datasets
 from enas import GeneralNetwork
 from enas import MicroNetwork
-from trainer import EnasMutator, EnasTrainer
-from base import ArchitectureCheckpoint, LRSchedulerCallback
+from base import EnasMutator, EnasTrainer
+from callbacks import (ArchitectureCheckpoint, LRSchedulerCallback)
 from utils import accuracy, reward_accuracy
 
 logger = logging.getLogger('nni')

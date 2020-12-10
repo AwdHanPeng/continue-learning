@@ -1,194 +1,211 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
-import json
 import logging
-import os
-import time
-from abc import abstractmethod
+from itertools import cycle
 
 import torch
+import torch.nn as nn
+import torch.optim as optim
 
-from .base_trainer import BaseTrainer
+from nni.nas.pytorch.trainer import Trainer
+# TODO: what is trainer?
+from nni.nas.pytorch.utils import AverageMeterGroup, to_device
+from .mutator import EnasMutator
 
-_logger = logging.getLogger(__name__)
-
-
-class TorchTensorEncoder(json.JSONEncoder):
-    def default(self, o):  # pylint: disable=method-hidden
-        if isinstance(o, torch.Tensor):
-            olist = o.tolist()
-            if "bool" not in o.type().lower() and all(map(lambda d: d == 0 or d == 1, olist)):
-                _logger.warning("Every element in %s is either 0 or 1. "
-                                "You might consider convert it into bool.", olist)
-            return olist
-        return super().default(o)
+logger = logging.getLogger(__name__)
 
 
-class Trainer(BaseTrainer):
+class EnasTrainer(Trainer):
     """
-    A trainer with some helper functions implemented. To implement a new trainer,
-    users need to implement :meth:`train_one_epoch`, :meth:`validate_one_epoch` and :meth:`checkpoint`.
+    ENAS trainer.
 
     Parameters
     ----------
     model : nn.Module
-        Model with mutables.
-    mutator : BaseMutator
-        A mutator object that has been initialized with the model.
+        PyTorch model to be trained.
     loss : callable
-        Called with logits and targets. Returns a loss tensor.
-        See `PyTorch loss functions`_ for examples.
+        Receives logits and ground truth label, return a loss tensor.
     metrics : callable
-        Called with logits and targets. Returns a dict that maps metrics keys to metrics data. For example,
-
-        .. code-block:: python
-
-            def metrics_fn(output, target):
-                return {"acc1": accuracy(output, target, topk=1), "acc5": accuracy(output, target, topk=5)}
-
+        Receives logits and ground truth label, return a dict of metrics.
+    reward_function : callable
+        Receives logits and ground truth label, return a tensor, which will be feeded to RL controller as reward.
     optimizer : Optimizer
-        Optimizer that optimizes the model.
+        The optimizer used for optimizing the model.
     num_epochs : int
-        Number of epochs of training.
-    dataset_train : torch.utils.data.Dataset
-        Dataset of training. If not otherwise specified, ``dataset_train`` and ``dataset_valid`` should be standard
-        PyTorch Dataset. See `torch.utils.data`_ for examples.
-    dataset_valid : torch.utils.data.Dataset
-        Dataset of validation/testing.
+        Number of epochs planned for training.
+    dataset_train : Dataset
+        Dataset for training. Will be split for training weights and architecture weights.
+    dataset_valid : Dataset
+        Dataset for testing.
+    mutator : EnasMutator
+        Use when customizing your own mutator or a mutator with customized parameters.
     batch_size : int
         Batch size.
     workers : int
-        Number of workers used in data preprocessing.
+        Workers for data loading.
     device : torch.device
-        Device object. Either ``torch.device("cuda")`` or ``torch.device("cpu")``. When ``None``, trainer will
-        automatic detects GPU and selects GPU first.
+        ``torch.device("cpu")`` or ``torch.device("cuda")``.
     log_frequency : int
-        Number of mini-batches to log metrics.
+        Step count per logging.
     callbacks : list of Callback
-        Callbacks to plug into the trainer. See Callbacks.
-
-
-    .. _`PyTorch loss functions`: https://pytorch.org/docs/stable/nn.html#loss-functions
-    .. _`torch.utils.data`: https://pytorch.org/docs/stable/data.html
+        list of callbacks to trigger at events.
+    entropy_weight : float
+        Weight of sample entropy loss.
+    skip_weight : float
+        Weight of skip penalty loss.
+    baseline_decay : float
+        Decay factor of baseline. New baseline will be equal to ``baseline_decay * baseline_old + reward * (1 - baseline_decay)``.
+    child_steps : int
+        How many mini-batches for model training per epoch.
+    mutator_lr : float
+        Learning rate for RL controller.
+    mutator_steps_aggregate : int
+        Number of steps that will be aggregated into one mini-batch for RL controller.
+    mutator_steps : int
+        Number of mini-batches for each epoch of RL controller learning.
+    aux_weight : float
+        Weight of auxiliary head loss. ``aux_weight * aux_loss`` will be added to total loss.
+    test_arc_per_epoch : int
+        How many architectures are chosen for direct test after each epoch.
     """
-    def __init__(self, model, mutator, loss, metrics, optimizer, num_epochs,
-                 dataset_train, dataset_valid, batch_size, workers, device, log_frequency, callbacks):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu") if device is None else device
-        self.model = model
-        self.mutator = mutator
-        self.loss = loss
 
-        self.metrics = metrics
-        self.optimizer = optimizer
-
-        self.model.to(self.device)
-        self.mutator.to(self.device)
-        self.loss.to(self.device)
-
-        self.num_epochs = num_epochs
-        self.dataset_train = dataset_train
-        self.dataset_valid = dataset_valid
+    def __init__(self, model, loss, metrics, reward_function,
+                 optimizer, num_epochs, dataset_train, dataset_valid,
+                 mutator=None, batch_size=64, workers=4, device=None, log_frequency=None, callbacks=None,
+                 entropy_weight=0.0001, skip_weight=0.8, baseline_decay=0.999, child_steps=500,
+                 mutator_lr=0.00035, mutator_steps_aggregate=20, mutator_steps=50, aux_weight=0.4,
+                 test_arc_per_epoch=1):
+        super().__init__(model, mutator if mutator is not None else EnasMutator(model),
+                         loss, metrics, optimizer, num_epochs, dataset_train, dataset_valid,
+                         batch_size, workers, device, log_frequency, callbacks)
+        self.reward_function = reward_function
+        self.mutator_optim = optim.Adam(self.mutator.parameters(), lr=mutator_lr)
         self.batch_size = batch_size
         self.workers = workers
-        self.log_frequency = log_frequency
-        self.log_dir = os.path.join("logs", str(time.time()))
-        os.makedirs(self.log_dir, exist_ok=True)
-        self.status_writer = open(os.path.join(self.log_dir, "log"), "w")
-        self.callbacks = callbacks if callbacks is not None else []
-        for callback in self.callbacks:
-            callback.build(self.model, self.mutator, self)
 
-    @abstractmethod
+        self.entropy_weight = entropy_weight
+        self.skip_weight = skip_weight
+        self.baseline_decay = baseline_decay
+        self.baseline = 0.
+        self.mutator_steps_aggregate = mutator_steps_aggregate
+        self.mutator_steps = mutator_steps
+        self.child_steps = child_steps
+        self.aux_weight = aux_weight
+        self.test_arc_per_epoch = test_arc_per_epoch
+
+        self.init_dataloader()
+
+    def init_dataloader(self):
+        n_train = len(self.dataset_train)
+        split = n_train // 10
+        indices = list(range(n_train))
+        train_sampler = torch.utils.data.sampler.SubsetRandomSampler(indices[:-split])
+        valid_sampler = torch.utils.data.sampler.SubsetRandomSampler(indices[-split:])
+        self.train_loader = torch.utils.data.DataLoader(self.dataset_train,
+                                                        batch_size=self.batch_size,
+                                                        sampler=train_sampler,
+                                                        num_workers=self.workers)
+        self.valid_loader = torch.utils.data.DataLoader(self.dataset_train,
+                                                        batch_size=self.batch_size,
+                                                        sampler=valid_sampler,
+                                                        num_workers=self.workers)
+        self.test_loader = torch.utils.data.DataLoader(self.dataset_valid,
+                                                       batch_size=self.batch_size,
+                                                       num_workers=self.workers)
+        self.train_loader = cycle(self.train_loader)
+        self.valid_loader = cycle(self.valid_loader)
+
     def train_one_epoch(self, epoch):
-        """
-        Train one epoch.
+        # Sample model and train
+        self.model.train()
+        self.mutator.eval()
+        meters = AverageMeterGroup()
+        for step in range(1, self.child_steps + 1):
+            x, y = next(self.train_loader)
+            x, y = to_device(x, self.device), to_device(y, self.device)
+            self.optimizer.zero_grad()
 
-        Parameters
-        ----------
-        epoch : int
-            Epoch number starting from 0.
-        """
-        pass
+            with torch.no_grad():
+                self.mutator.reset()
+            self._write_graph_status()
+            logits = self.model(x)
 
-    @abstractmethod
+            if isinstance(logits, tuple):
+                logits, aux_logits = logits
+                aux_loss = self.loss(aux_logits, y)
+            else:
+                aux_loss = 0.
+            metrics = self.metrics(logits, y)
+            loss = self.loss(logits, y)
+            loss = loss + self.aux_weight * aux_loss
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.model.parameters(), 5.)
+            self.optimizer.step()
+            metrics["loss"] = loss.item()
+            meters.update(metrics)
+
+            if self.log_frequency is not None and step % self.log_frequency == 0:
+                logger.info("Model Epoch [%d/%d] Step [%d/%d]  %s", epoch + 1,
+                            self.num_epochs, step, self.child_steps, meters)
+
+        # Train sampler (mutator)
+        self.model.eval()
+        self.mutator.train()
+        meters = AverageMeterGroup()
+        for mutator_step in range(1, self.mutator_steps + 1):
+            self.mutator_optim.zero_grad()
+            for step in range(1, self.mutator_steps_aggregate + 1):
+                x, y = next(self.valid_loader)
+                x, y = to_device(x, self.device), to_device(y, self.device)
+
+                self.mutator.reset()
+                with torch.no_grad():
+                    logits = self.model(x)
+                self._write_graph_status()
+                metrics = self.metrics(logits, y)
+                reward = self.reward_function(logits, y)
+                if self.entropy_weight:
+                    reward += self.entropy_weight * self.mutator.sample_entropy.item()
+                self.baseline = self.baseline * self.baseline_decay + reward * (1 - self.baseline_decay)
+                loss = self.mutator.sample_log_prob * (reward - self.baseline)
+                if self.skip_weight:
+                    loss += self.skip_weight * self.mutator.sample_skip_penalty
+                metrics["reward"] = reward
+                metrics["loss"] = loss.item()
+                metrics["ent"] = self.mutator.sample_entropy.item()
+                metrics["log_prob"] = self.mutator.sample_log_prob.item()
+                metrics["baseline"] = self.baseline
+                metrics["skip"] = self.mutator.sample_skip_penalty
+
+                loss /= self.mutator_steps_aggregate
+                loss.backward()
+                meters.update(metrics)
+
+                cur_step = step + (mutator_step - 1) * self.mutator_steps_aggregate
+                if self.log_frequency is not None and cur_step % self.log_frequency == 0:
+                    logger.info("RL Epoch [%d/%d] Step [%d/%d] [%d/%d]  %s", epoch + 1, self.num_epochs,
+                                mutator_step, self.mutator_steps, step, self.mutator_steps_aggregate,
+                                meters)
+
+            nn.utils.clip_grad_norm_(self.mutator.parameters(), 5.)
+            self.mutator_optim.step()
+
     def validate_one_epoch(self, epoch):
-        """
-        Validate one epoch.
+        with torch.no_grad():
+            for arc_id in range(self.test_arc_per_epoch):
+                meters = AverageMeterGroup()
+                for x, y in self.test_loader:
+                    x, y = to_device(x, self.device), to_device(y, self.device)
+                    self.mutator.reset()
+                    logits = self.model(x)
+                    if isinstance(logits, tuple):
+                        logits, _ = logits
+                    metrics = self.metrics(logits, y)
+                    loss = self.loss(logits, y)
+                    metrics["loss"] = loss.item()
+                    meters.update(metrics)
 
-        Parameters
-        ----------
-        epoch : int
-            Epoch number starting from 0.
-        """
-        pass
-
-    def train(self, validate=True):
-        """
-        Train ``num_epochs``.
-        Trigger callbacks at the start and the end of each epoch.
-
-        Parameters
-        ----------
-        validate : bool
-            If ``true``, will do validation every epoch.
-        """
-        for epoch in range(self.num_epochs):
-            for callback in self.callbacks:
-                callback.on_epoch_begin(epoch)
-
-            # training
-            _logger.info("Epoch %d Training", epoch + 1)
-            self.train_one_epoch(epoch)
-
-            if validate:
-                # validation
-                _logger.info("Epoch %d Validating", epoch + 1)
-                self.validate_one_epoch(epoch)
-
-            for callback in self.callbacks:
-                callback.on_epoch_end(epoch)
-
-    def validate(self):
-        """
-        Do one validation.
-        """
-        self.validate_one_epoch(-1)
-
-    def export(self, file):
-        """
-        Call ``mutator.export()`` and dump the architecture to ``file``.
-
-        Parameters
-        ----------
-        file : str
-            A file path. Expected to be a JSON.
-        """
-        mutator_export = self.mutator.export()
-        with open(file, "w") as f:
-            json.dump(mutator_export, f, indent=2, sort_keys=True, cls=TorchTensorEncoder)
-
-    def checkpoint(self):
-        """
-        Return trainer checkpoint.
-        """
-        raise NotImplementedError("Not implemented yet")
-
-    def enable_visualization(self):
-        """
-        Enable visualization. Write graph and training log to folder ``logs/<timestamp>``.
-        """
-        sample = None
-        for x, _ in self.train_loader:
-            sample = x.to(self.device)[:2]
-            break
-        if sample is None:
-            _logger.warning("Sample is %s.", sample)
-        _logger.info("Creating graph json, writing to %s. Visualization enabled.", self.log_dir)
-        with open(os.path.join(self.log_dir, "graph.json"), "w") as f:
-            json.dump(self.mutator.graph(sample), f)
-        self.visualization_enabled = True
-
-    def _write_graph_status(self):
-        if hasattr(self, "visualization_enabled") and self.visualization_enabled:
-            print(json.dumps(self.mutator.status()), file=self.status_writer, flush=True)
+                logger.info("Test Epoch [%d/%d] Arc [%d/%d] Summary  %s",
+                            epoch + 1, self.num_epochs, arc_id + 1, self.test_arc_per_epoch,
+                            meters.summary())

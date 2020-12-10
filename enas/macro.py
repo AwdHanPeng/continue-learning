@@ -3,7 +3,7 @@
 
 import torch.nn as nn
 
-from base import mutables
+from nni.nas.pytorch import mutables
 from .ops import FactorizedReduce, ConvBranch, PoolBranch
 
 
