@@ -11,7 +11,7 @@ from sklearn.metrics import accuracy_score
 from .trainer import Trainer
 from models import MLP, Controller
 import datetime
-
+import math
 
 class Mutator:
 
@@ -62,7 +62,7 @@ class Mutator:
         step_probs = []
         step_idx = []
         step_losses = []
-        sample_idx = torch.tensor(0).view(-1)
+        sample_idx = torch.tensor(0).view(-1).to(self.device)
 
         hidden = None
         for step in range(steps):
@@ -83,7 +83,6 @@ class Mutator:
             :param layer:
             :return:
             '''
-            # FIXME:
             for key, value in use_dict.items():
                 if 'Stack{}'.format(layer) in key or 'classify' in key:
                     cur_model_dict[key] = value
@@ -130,12 +129,18 @@ class Mutator:
         alpha = []
         assert len(back_acc_list) == len(self.task_acc)
         for origin_acc, eval_back_acc in zip(self.task_acc, back_acc_list):
-            acc_drop = max(0, origin_acc - eval_back_acc)
+            # acc_drop = max(0, origin_acc - eval_back_acc)
+            acc_drop = origin_acc - eval_back_acc #TODO, find better reward
             alpha.append(acc_drop / origin_acc)
         noise = 0.001
-        alpha = 1 / (torch.mean(torch.tensor(alpha)) + noise)
+        # alpha = 1 / (torch.mean(torch.tensor(alpha)) + noise)
+        # alpha = -1 * (torch.mean(torch.tensor(alpha))) #TODO, find better reward
+        # alpha =  torch.sigmoid(-1 * (torch.mean(torch.tensor(alpha)))) - 0.5
+        # alpha = -1 * (torch.mean(torch.tensor(alpha))) + 0.05
+        # alpha = -1 * (torch.mean(torch.tensor(alpha))) + 0.5
+        alpha = -1 * (torch.max(torch.tensor(alpha))) + 0.1
         reward = alpha + beta
-
+        #感觉惩罚的力度不够 可以考虑log函数
         self.tensorboard_writer.add_scalar('Reward/Sum', reward, self.iter)
         self.tensorboard_writer.add_scalar('Reward/Alpha', alpha, self.iter)
         self.tensorboard_writer.add_scalar('Reward/Beta', beta, self.iter)
@@ -166,7 +171,7 @@ class Mutator:
                 print('Task{} Best Acc is {}'.format(task, cur_acc))
                 report_final_eval_acc[task][:task + 1] = [cur_acc]
             else:
-                best_reward = 0
+                best_reward = float('-inf')
                 cur_acc_lis = []
                 cur_best_acc, cur_best_dic, cur_best_config = 0, None, None
                 report_back_acc_list = None

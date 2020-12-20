@@ -14,8 +14,8 @@ class StackedLSTMCell(nn.Module):
 
     def forward(self, inputs, hidden):
         prev_h, prev_c = hidden if hidden else (
-            [torch.zeros(1, self.hidden_size)] * self.lstm_num_layers,
-            [torch.zeros(1, self.hidden_size)] * self.lstm_num_layers)
+            [torch.zeros(1, self.hidden_size).to(inputs.device)] * self.lstm_num_layers,
+            [torch.zeros(1, self.hidden_size).to(inputs.device)] * self.lstm_num_layers)
         next_h, next_c = [], []
         inputs = inputs.view(1, -1)
         for i, m in enumerate(self.lstm_modules):
@@ -37,7 +37,7 @@ class Controller(nn.Module):
         :param adapt: 
         '''
         super().__init__()
-        if adapt:
+        if not adapt:
             self.choice_num = (task_num - 1) * 1 + 1
         else:
             self.choice_num = (task_num - 1) * 2 + 1
@@ -59,8 +59,8 @@ class Controller(nn.Module):
         embed = self.embedding(input)
         hidden, cell = self.lstm(embed, hidden)
         mask = self.create_mask(task)
-        logit = self.choice(hidden[-1].squeeze()).masked_fill_(mask=(mask == 0), value=-1e9)
-        # probs = F.softmax(logit, dim=-1)
-
+        logit = self.choice(hidden[-1].squeeze()).masked_fill_(mask=(mask.to(input.device) == 0), value=-1e9)
+        probs = F.softmax(logit, dim=-1)
+        # print(probs.tolist())
         # print(mask.tolist())
         return logit, (hidden, cell)
