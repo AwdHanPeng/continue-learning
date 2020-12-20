@@ -28,7 +28,6 @@ def get_dataset(opts):
         dat['train'] = CIFAR10(root="./data", train=True, download=True, transform=train_transform)
         dat['test'] = CIFAR10(root="./data", train=False, download=True, transform=valid_transform)
     elif opts.dataset == 'mnist':
-        # FIXME
         train_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(*mnist_norm)])
         valid_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(*mnist_norm)])
         dat['train'] = MNIST(root="./data", train=True, download=True, transform=train_transform)

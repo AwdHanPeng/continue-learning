@@ -40,9 +40,15 @@ class Mutator:
 
     def run(self):
         if self.args.base == 'mlp':
-            self.run_mlp()
+            report_final_eval_acc = self.run_mlp()
         else:
             raise NotImplemented
+        print('Acc:')
+        for items in report_final_eval_acc:
+            s = ''
+            for item in items:
+                s += '%.3f\t' % item
+            print(s)
 
     def controller_sample(self, task):
         if self.args.base == 'mlp':
@@ -87,7 +93,7 @@ class Mutator:
             step = step.item()
             if step == 0:
                 choice = 0
-                create_log += 'NEW for the {} layer. '.format(layer)
+                create_log += 'NEW      '.format(layer)
 
                 cur_model_config.append(default_config[layer])
             else:
@@ -97,11 +103,11 @@ class Mutator:
                 use_config = self.tasks_config[task_num]
 
                 if choice == 1:
-                    create_log += 'REUSE for the {} layer from task {}. '.format(layer, task_num)
+                    create_log += 'REUSE from task {}        '.format(task_num)
                     cur_model_dict = get_layer_dict(cur_model_dict, use_dict, layer)
                     cur_model_config.append(use_config[layer])
                 elif self.use_scope == 3 and choice == 2:
-                    create_log += 'ADAPT for the {} layer from task {}. '.format(layer, task_num)
+                    create_log += 'ADAPT from task {}        '.format(task_num)
                     raise NotImplemented
         assert len(cur_model_config) == len(step_idx)
         return cur_model_dict, cur_model_config, create_log
@@ -128,6 +134,9 @@ class Mutator:
         return reward.item()
 
     def run_mlp(self):
+
+        report_final_eval_acc = [[0.0] * self.opts.num_task for _ in range(self.opts.num_task)]
+
         if self.args.dataset == 'mnist':
             input_feature = 28 * 28
         elif self.args.dataset == 'cifar10':
@@ -147,6 +156,7 @@ class Mutator:
                 self.task_acc.append(cur_acc)
                 self.model_dict.append(cur_model_dic)
                 print('Task{} Best Acc is {}'.format(task, cur_acc))
+                report_final_eval_acc[task][:task + 1] = [cur_acc]
             else:
                 best_reward = 0
                 cur_acc_lis = []
@@ -168,7 +178,8 @@ class Mutator:
                     if steps % self.args.controller_logging_step == 0:
                         print('-------Logging at {} step for controller-------'.format(steps))
                         print(create_log)
-                        print('Reward:{}. task acc:{}. Back eval acc s:{}'.format(reward, cur_acc, back_acc_list))
+                        print('Reward:{}. task acc:{}.'.format(reward, cur_acc))
+                        print('Back eval acc s:{}'.format(back_acc_list))
                     if reward > best_reward:
                         # 通过判断当前reward的情况 来决定是否存模型 而不是仅根据当前采样出来的子模型的acc来决定
                         best_reward = reward
@@ -181,9 +192,11 @@ class Mutator:
                     loss.backward()
                     self.controller_optim.step()
                 print(
-                    '\033[95m After task {}, task acc is {}, back eval acc s are {} \033[0m'.format(task, cur_best_acc,
-                                                                                                    report_back_acc_list))
-                print('\033task respect best acc s:{}\033[0m'.format(self.task_acc))
+                    '\033[95mAfter task {}, task acc is {}'.format(task, cur_best_acc))
+                print('back eval acc s are {}'.format(report_back_acc_list))
+                print('task respect best acc s:{}\033[0m'.format(self.task_acc))
                 self.tasks_config.append(cur_best_config)
                 self.task_acc.append(cur_best_acc)
                 self.model_dict.append(cur_best_dic)
+                report_final_eval_acc[task][:len(report_back_acc_list) + 1] = report_back_acc_list + [cur_best_acc]
+        return report_final_eval_acc
