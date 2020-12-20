@@ -7,12 +7,17 @@ class StackedLSTMCell(nn.Module):
     def __init__(self, layers, size):
         super().__init__()
         self.lstm_num_layers = layers
-        self.lstm_modules = nn.ModuleList([nn.LSTMCell(size, size, )
+        self.hidden_size = size
+        self.input_size = size
+        self.lstm_modules = nn.ModuleList([nn.LSTMCell(self.input_size, self.hidden_size, )
                                            for _ in range(self.lstm_num_layers)])
 
     def forward(self, inputs, hidden):
-        prev_h, prev_c = hidden
+        prev_h, prev_c = hidden if hidden else (
+            [torch.zeros(1, self.hidden_size)] * self.lstm_num_layers,
+            [torch.zeros(1, self.hidden_size)] * self.lstm_num_layers)
         next_h, next_c = [], []
+        inputs = inputs.view(1, -1)
         for i, m in enumerate(self.lstm_modules):
             curr_h, curr_c = m(inputs, (prev_h[i], prev_c[i]))
             next_c.append(curr_c)
@@ -44,18 +49,18 @@ class Controller(nn.Module):
     def create_mask(self, task):
         mask = [0] * self.choice_num
         if self.adapt:
-            mask[:task * 3] = [1] * (1 + task * 2)
+            mask[:1 + task * 2] = [1] * (1 + task * 2)
         else:
-            mask[:task * 2] = [1] * (1 + task * 1)
+            mask[:1 + task * 1] = [1] * (1 + task * 1)
+        assert len(mask) == self.choice_num
         return torch.tensor(mask)
 
     def forward(self, input, task, hidden=None):
         embed = self.embedding(input)
-        if hidden:
-            hidden, cell = self.lstm(embed, hidden)
-        else:
-            hidden, cell = self.lstm(embed)
+        hidden, cell = self.lstm(embed, hidden)
         mask = self.create_mask(task)
-        logit = self.choice(hidden[-1]).masked_fill_(mask=(mask == 0), value=-1e9)
-        probs = F.softmax(output, dim=-1)
+        logit = self.choice(hidden[-1].squeeze()).masked_fill_(mask=(mask == 0), value=-1e9)
+        # probs = F.softmax(logit, dim=-1)
+
+        # print(mask.tolist())
         return logit, (hidden, cell)

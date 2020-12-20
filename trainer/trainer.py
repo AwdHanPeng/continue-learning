@@ -8,6 +8,7 @@ from tqdm import tqdm
 import datetime
 from torch.nn import functional as F
 from sklearn.metrics import accuracy_score
+from copy import deepcopy
 
 
 class Trainer:
@@ -41,15 +42,16 @@ class Trainer:
         self.batch_size = args.batch_size
         self.loss_function = torch.nn.CrossEntropyLoss()
 
-    # FIXME
     def reload_checkpoint(self, dic):
         '''
         这里边传入要替换的参数，参数仅仅选择好，建立映射的过程在该函数内完成，可参照rat里的代码
         :param dict: 
         :return: 
         '''
-        # FIXME
-        print('PASS')
+        dic = deepcopy(dic)
+        for key, value in self.model.state_dict().items():
+            if key not in dic:
+                dic[key] = value
         self.model.load_state_dict(dic)
 
     def history_eval(self, task_list):
@@ -67,12 +69,10 @@ class Trainer:
         return acc_list
 
     def run(self):
-        print('Training On Task{}'.format(self.task))
         current_train_data, curren_test_data = self.data[self.task]['train'], self.data[self.task]['test']
         best_acc = 0
         model_dict = None
-        epoch_iter = tqdm(self.epochs)
-        for epoch in epoch_iter:
+        for epoch in range(self.epochs):
             self.model.train()
             idx = np.arange(len(current_train_data['x']))
             if self.shuffle:
@@ -91,7 +91,7 @@ class Trainer:
                 current_loss.backward()
                 self.optim.step()
 
-                if i % self.eval_steps == 0:
+                if i // self.batch_size % self.eval_steps == 0:
                     self.model.eval()
                     v_images = curren_test_data['x'].to(self.device)
                     v_targets = curren_test_data['y'].to(self.device)
@@ -102,5 +102,4 @@ class Trainer:
                     if acc >= best_acc:
                         best_acc = acc
                         model_dict = self.model.state_dict()
-                        epoch_iter.write('Task{} Best Acc is {}'.format(self.task, best_acc))
         return best_acc, model_dict

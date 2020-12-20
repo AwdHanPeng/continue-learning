@@ -1,27 +1,38 @@
 from torchvision import transforms
-from torchvision.datasets import CIFAR10
+from torchvision.datasets import CIFAR10, MNIST
 import torch
+import os
+import pickle as pkl
 
 
 def get_dataset(opts):
-    mean = [x / 255 for x in [125.3, 123.0, 113.9]]
-    std = [x / 255 for x in [63.0, 62.1, 66.7]]
+    save_dir = os.path.join('catch')
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    save_path = os.path.join(save_dir, '{}.pkl'.format(opts.dataset))
+    if os.path.exists(save_path):
+        with open(save_path, 'rb') as f:
+            data = pkl.load(f)
+            print('Load data from {}'.format(save_path))
+            return data
 
-    normalize = [
-        transforms.ToTensor(),
-        transforms.Normalize(mean, std)
-    ]
-
-    train_transform = transforms.Compose(normalize)
-    valid_transform = transforms.Compose(normalize)
+    cifar10_norm = ((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+    mnist_norm = ((0.1307,), (0.3081,))
 
     dat = {}
     if opts.dataset == "cifar10":
+
+        train_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(*cifar10_norm)])
+        valid_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(*cifar10_norm)])
+
         dat['train'] = CIFAR10(root="./data", train=True, download=True, transform=train_transform)
         dat['test'] = CIFAR10(root="./data", train=False, download=True, transform=valid_transform)
     elif opts.dataset == 'mnist':
-        dat['train'] = CIFAR10(root="./data", train=True, download=True, transform=train_transform)
-        dat['test'] = CIFAR10(root="./data", train=False, download=True, transform=valid_transform)
+        # FIXME
+        train_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(*mnist_norm)])
+        valid_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(*mnist_norm)])
+        dat['train'] = MNIST(root="./data", train=True, download=True, transform=train_transform)
+        dat['test'] = MNIST(root="./data", train=False, download=True, transform=valid_transform)
 
     else:
         raise NotImplementedError
@@ -41,4 +52,7 @@ def get_dataset(opts):
         for s in ['train', 'test']:
             data[t][s]['x'] = torch.stack(data[t][s]['x'], dim=0)
             data[t][s]['y'] = torch.LongTensor(data[t][s]['y']).view(-1)
+    with open(save_path, 'wb') as f:
+        pkl.dump(data, f)
+        print('Save data into {}'.format(save_path))
     return data

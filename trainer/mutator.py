@@ -9,7 +9,7 @@ import datetime
 from torch.nn import functional as F
 from sklearn.metrics import accuracy_score
 from .trainer import Trainer
-from .models import MLP, Controller
+from models import MLP, Controller
 
 
 class Mutator:
@@ -28,11 +28,15 @@ class Mutator:
         self.data = data
         self.opts = opts
         self.controller = Controller(args=self.args, task_num=self.opts.num_task, adapt=self.args.adapt)
-        self.controller_optim = Adam(self.controller.parameters())
+        self.controller_optim = Adam(self.controller.parameters(), lr=args.controller_lr)
+        cuda_condition = torch.cuda.is_available() and args.with_cuda
+        self.device = torch.device("cuda" if cuda_condition else "cpu")
+        self.controller = self.controller.to(self.device)
+
         self.tasks_config = []
         self.task_acc = []
         self.model_dict = []
-        self.use_scope = 3 if self.args.adapt else 2
+        self.use_scope = 2 if self.args.adapt else 1
 
     def run(self):
         if self.args.base == 'mlp':
@@ -48,21 +52,21 @@ class Mutator:
         step_probs = []
         step_idx = []
         step_losses = []
-        sample_idx = 0
+        sample_idx = torch.tensor(0).view(-1)
 
         hidden = None
-        for step in steps:
-            logit, (hidden, cell) = self.controller(input=sample_idx, task=task, hidden=hidden)
+        for step in range(steps):
+            logit, hidden = self.controller(input=sample_idx, task=task, hidden=hidden)
             sample_idx = torch.multinomial(F.softmax(logit, dim=-1), 1).view(-1)
-            assert sample_idx < task * self.use_scope
-            step_probs.append(probs)
+            assert sample_idx < task * self.use_scope + 1
+            step_probs.append(logit)
             step_idx.append(sample_idx)
-            step_losses.append(F.cross_entropy(logit, sample_idx))
-        step_losses = torch.tensor(step_losses)
+            step_losses.append(F.cross_entropy(logit.view(1, -1), sample_idx.view(-1)))
+        step_losses = torch.stack(step_losses, dim=0)
         return step_probs, step_idx, torch.mean(step_losses)
 
     def crop_model(self, step_idx, default_config):
-        def get_layer_dict(dic, layer):
+        def get_layer_dict(cur_model_dict, use_dict, layer):
             '''
             从一个模型的参数中，取出某一个层的参数
             :param dic:
@@ -70,32 +74,37 @@ class Mutator:
             :return:
             '''
             # FIXME:
-            pass
+            for key, value in use_dict.items():
+                if 'Stack{}'.format(layer) in key or 'classify' in key:
+                    cur_model_dict[key] = value
+            return cur_model_dict
 
-        cur_model_dict = []
+        cur_model_dict = dict()
         cur_model_config = []
-        for layer, step in enumerate(range(step_idx)):
+        create_log = ''
+        for layer, step in enumerate(step_idx):
             # 选择空间 [new, reuse 0, adapt 0, reuse 1, adapt1 ,.....]
-
+            step = step.item()
             if step == 0:
                 choice = 0
-                print('New {} layer para'.format(step))
+                create_log += 'NEW for the {} layer. '.format(layer)
 
                 cur_model_config.append(default_config[layer])
             else:
-                task_num = (step - 1) // (self.use_scope - 1)
-                choice = (step - 1) % (self.use_scope - 1) + 1
+                task_num = (step - 1) // self.use_scope
+                choice = (step - 1) % self.use_scope + 1
                 use_dict = self.model_dict[task_num]
                 use_config = self.tasks_config[task_num]
 
                 if choice == 1:
-                    print('reuse {} layer para of task {}'.format(layer, task_num))
-                    cur_model_dict.append(get_layer_dict(use_dict, layer))
+                    create_log += 'REUSE for the {} layer from task {}. '.format(layer, task_num)
+                    cur_model_dict = get_layer_dict(cur_model_dict, use_dict, layer)
                     cur_model_config.append(use_config[layer])
                 elif self.use_scope == 3 and choice == 2:
-                    print('Adapt {} layer para of task {}'.format(layer, task_num))
+                    create_log += 'ADAPT for the {} layer from task {}. '.format(layer, task_num)
                     raise NotImplemented
-        return cur_model_dict, cur_model_config
+        assert len(cur_model_config) == len(step_idx)
+        return cur_model_dict, cur_model_config, create_log
 
     def count_reward(self, cur_acc_lis, back_acc_list):
         '''
@@ -108,51 +117,58 @@ class Mutator:
             beta = (cur_acc_lis[-1] - cur_acc_lis[-2]) / cur_acc_lis[-2]
         else:
             beta = 0
-        self.controller.eval()
         alpha = []
-        assert len(history_acc_list) == len(self.task_acc)
+        assert len(back_acc_list) == len(self.task_acc)
         for origin_acc, eval_back_acc in zip(self.task_acc, back_acc_list):
             acc_drop = max(0, origin_acc - eval_back_acc)
             alpha.append(acc_drop / origin_acc)
         noise = 0.001
         alpha = torch.mean(torch.tensor(alpha)) + noise
         reward = 1 / alpha + beta
-        return reward
+        return reward.item()
 
     def run_mlp(self):
-        if args.dataset == 'mnist':
+        if self.args.dataset == 'mnist':
             input_feature = 28 * 28
-        elif args.dataset == 'cifar10':
+        elif self.args.dataset == 'cifar10':
             input_feature = 32 * 32
         else:
             input_feature = 0
             raise NotImplemented
         default_config = [{'mlp': (input_feature, self.args.mlp_size)}] + [
             {'mlp': (self.args.mlp_size, self.args.mlp_size)}] * (self.args.mlp_linear - 1)
-        for task in self.opts.num_task:
+        for task in range(self.opts.num_task):
+            print('--------------Create Config and Dict for task {}--------------'.format(task))
             if task == 0:
                 cur_model = MLP(default_config, self.args.mlp_size, self.opts)
                 trainer = Trainer(model=cur_model, task=task, args=self.args, data=self.data)
                 cur_acc, cur_model_dic = trainer.run()
-                self.tasks_config.append(config)
+                self.tasks_config.append(default_config)
                 self.task_acc.append(cur_acc)
                 self.model_dict.append(cur_model_dic)
+                print('Task{} Best Acc is {}'.format(task, cur_acc))
             else:
                 best_reward = 0
                 cur_acc_lis = []
                 cur_best_acc, cur_best_dic, cur_best_config = 0, None, None
                 report_back_acc_list = None
-                for _ in range(self.args.controller_steps):
+                for steps in range(self.args.controller_steps):
                     self.controller.train()
                     step_probs, step_idx, sample_loss = self.controller_sample(task)
-                    cur_model_dict, cur_model_config = self.crop_model(step_idx, default_config)
+                    assert len(self.model_dict) <= task
+                    cur_model_dict, cur_model_config, create_log = self.crop_model(step_idx, default_config)
                     cur_model = MLP(cur_model_config, self.args.mlp_size, self.opts)
                     trainer = Trainer(model=cur_model, task=task, args=self.args, data=self.data)
-                    Trainer.reload_checkpoint(cur_model_dict)
+                    trainer.reload_checkpoint(cur_model_dict)
                     cur_acc, cur_model_dic = trainer.run()
                     cur_acc_lis.append(cur_acc)
-                    back_acc_list = trainer.history_eval(task_list=[range(0, task)])
+                    back_acc_list = trainer.history_eval(task_list=list(range(0, task)))
                     reward = self.count_reward(cur_acc_lis, back_acc_list)
+
+                    if steps % self.args.controller_logging_step == 0:
+                        print('-------Logging at {} step for controller-------'.format(steps))
+                        print(create_log)
+                        print('Reward:{}. task acc:{}. Back eval acc s:{}'.format(reward, cur_acc, back_acc_list))
                     if reward > best_reward:
                         # 通过判断当前reward的情况 来决定是否存模型 而不是仅根据当前采样出来的子模型的acc来决定
                         best_reward = reward
@@ -164,7 +180,10 @@ class Mutator:
                     loss = sample_loss * reward
                     loss.backward()
                     self.controller_optim.step()
-                print('After task {}, back eval acc is {}'.format(task, report_back_acc_list))
+                print(
+                    '\033[95m After task {}, task acc is {}, back eval acc s are {} \033[0m'.format(task, cur_best_acc,
+                                                                                                    report_back_acc_list))
+                print('\033task respect best acc s:{}\033[0m'.format(self.task_acc))
                 self.tasks_config.append(cur_best_config)
                 self.task_acc.append(cur_best_acc)
                 self.model_dict.append(cur_best_dic)

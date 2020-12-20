@@ -19,7 +19,7 @@ class MLP(nn.Module):
             sublayer = nn.Sequential()
             for key, size in config.items():
                 if key == 'mlp':
-                    sublayer.add_module(key, nn.Linear(size))
+                    sublayer.add_module(key, nn.Linear(*size))
                 elif key == 'conv':
                     raise NotImplemented
             self.layers.add_module('Stack{}'.format(idx), sublayer)
