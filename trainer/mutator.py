@@ -10,6 +10,7 @@ from torch.nn import functional as F
 from sklearn.metrics import accuracy_score
 from .trainer import Trainer
 from models import MLP, Controller
+import datetime
 
 
 class Mutator:
@@ -37,6 +38,9 @@ class Mutator:
         self.task_acc = []
         self.model_dict = []
         self.use_scope = 2 if self.args.adapt else 1
+
+        self.tensorboard_writer = SummaryWriter()
+        self.iter = 0
 
     def run(self):
         if self.args.base == 'mlp':
@@ -129,12 +133,16 @@ class Mutator:
             acc_drop = max(0, origin_acc - eval_back_acc)
             alpha.append(acc_drop / origin_acc)
         noise = 0.001
-        alpha = torch.mean(torch.tensor(alpha)) + noise
-        reward = 1 / alpha + beta
+        alpha = 1 / (torch.mean(torch.tensor(alpha)) + noise)
+        reward = alpha + beta
+
+        self.tensorboard_writer.add_scalar('Reward/Sum', reward, self.iter)
+        self.tensorboard_writer.add_scalar('Reward/Alpha', alpha, self.iter)
+        self.tensorboard_writer.add_scalar('Reward/Beta', beta, self.iter)
+        self.iter += 1
         return reward.item()
 
     def run_mlp(self):
-
         report_final_eval_acc = [[0.0] * self.opts.num_task for _ in range(self.opts.num_task)]
 
         if self.args.dataset == 'mnist':

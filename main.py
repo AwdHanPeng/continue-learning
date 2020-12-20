@@ -28,9 +28,9 @@ if __name__ == '__main__':
     parser.add_argument("--n_layers", type=int, default=2, help="number of rnn layers")
 
     # controller model trains
-    parser.add_argument("--controller_steps", type=int, default=5, help="train steps for controller")
+    parser.add_argument("--controller_steps", type=int, default=500, help="train steps for controller")
     parser.add_argument("--controller_lr", type=float, default=1e-4, help="learning rate of adam")
-    parser.add_argument("--controller_logging_step", type=int, default=1, help="log after x steps")
+    parser.add_argument("--controller_logging_step", type=int, default=100, help="log after x steps")
 
     # base model opts
     parser.add_argument("--base", type=str, default='mlp', help="base model name")
