@@ -13,6 +13,7 @@ from models import MLP, Controller
 import datetime
 import math
 
+
 class Mutator:
 
     def __init__(self, args, data, opts):
@@ -128,19 +129,28 @@ class Mutator:
             beta = 0
         alpha = []
         assert len(back_acc_list) == len(self.task_acc)
-        for origin_acc, eval_back_acc in zip(self.task_acc, back_acc_list):
-            # acc_drop = max(0, origin_acc - eval_back_acc)
-            acc_drop = origin_acc - eval_back_acc #TODO, find better reward
-            alpha.append(acc_drop / origin_acc)
+        # for origin_acc, eval_back_acc in zip(self.task_acc, back_acc_list):
+        #     # acc_drop = max(0, origin_acc - eval_back_acc)
+        #     acc_drop = origin_acc - eval_back_acc  # TODO, find better reward
+        #     alpha.append(acc_drop / origin_acc)
         noise = 0.001
         # alpha = 1 / (torch.mean(torch.tensor(alpha)) + noise)
         # alpha = -1 * (torch.mean(torch.tensor(alpha))) #TODO, find better reward
         # alpha =  torch.sigmoid(-1 * (torch.mean(torch.tensor(alpha)))) - 0.5
         # alpha = -1 * (torch.mean(torch.tensor(alpha))) + 0.05
         # alpha = -1 * (torch.mean(torch.tensor(alpha))) + 0.5
-        alpha = -1 * (torch.max(torch.tensor(alpha))) + 0.1
-        reward = alpha + beta
-        #感觉惩罚的力度不够 可以考虑log函数
+        # alpha = -1 * (torch.max(torch.tensor(alpha))) + 0.1
+        # reward = alpha + beta
+
+        for origin_acc, eval_back_acc in zip(self.task_acc, back_acc_list):
+            # acc_drop = max(0, origin_acc - eval_back_acc)
+            acc_drop = eval_back_acc / origin_acc
+            alpha.append(acc_drop)
+        alpha = torch.mean(torch.tensor(alpha))
+        # alpha = max(alpha - 0.8, 0.0) * 5.0  # 尝试设置了一个tolerance
+        reward = alpha
+
+        # 感觉惩罚的力度不够 可以考虑log函数
         self.tensorboard_writer.add_scalar('Reward/Sum', reward, self.iter)
         self.tensorboard_writer.add_scalar('Reward/Alpha', alpha, self.iter)
         self.tensorboard_writer.add_scalar('Reward/Beta', beta, self.iter)
@@ -173,7 +183,7 @@ class Mutator:
             else:
                 best_reward = float('-inf')
                 cur_acc_lis = []
-                cur_best_acc, cur_best_dic, cur_best_config = 0, None, None
+                cur_best_acc, cur_best_dic, cur_best_config, best_create_log = 0, None, None, None
                 report_back_acc_list = None
                 for steps in range(self.args.controller_steps):
                     self.controller.train()
@@ -200,14 +210,16 @@ class Mutator:
                         cur_best_acc = cur_acc
                         cur_best_config = cur_model_config
                         report_back_acc_list = back_acc_list
-
+                        best_create_log = create_log
                     loss = sample_loss * reward
                     loss.backward()
                     self.controller_optim.step()
                 print(
                     '\033[95mAfter task {}, task acc is {}'.format(task, cur_best_acc))
+                print(best_create_log)
                 print('back eval acc s are {}'.format(report_back_acc_list))
                 print('task respect best acc s:{}\033[0m'.format(self.task_acc))
+                print('best reward :{}\033[0m'.format(best_reward))
                 self.tasks_config.append(cur_best_config)
                 self.task_acc.append(cur_best_acc)
                 self.model_dict.append(cur_best_dic)

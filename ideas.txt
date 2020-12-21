@@ -1,0 +1,131 @@
+to make a better reward
+实验时固定了随机种子
+
+
+首先不考虑beta函数
+
+设计reward的基础函数为
+1 / torch.mean(torch.tensor(alpha))
+
+Dec21_15-20-42
+1) 在计算acc drop的时候，只计算距离当前任务最近的上一个任务的情况
+发现第一个任务之内 reward能达到几百左右，但是第二个任务之后为6到2，第三个任务3到2，
+观察每个step的采样，在第二个任务时采样边开始出现大量reuse 0，无法采样到new 和reuse x等
+1.000   0.000   0.000   0.000   0.000
+0.999   0.994   0.000   0.000   0.000
+0.736   0.832   0.996   0.000   0.000
+0.653   0.559   0.706   0.997   0.000
+0.878   0.484   0.082   0.574   0.977
+分析原因时发现，在第一个任务时，三个mlp都reuse，第零个任务基本就不会drop，所以得到了100+的reward，
+从而导致了对reuse 0的过分依赖
+
+Dec21_15-24-47
+2）尝试全部的acc drop mean
+1.000   0.000   0.000   0.000   0.000
+0.999   0.994   0.000   0.000   0.000
+0.983   0.785   0.996   0.000   0.000
+0.993   0.737   0.568   0.998   0.000
+0.965   0.787   0.826   0.528   0.986
+这个效果其实还不错，
+但是问题还是差不多的 reward仍然是第一个task飚的特别高，之后就不再有提升的迹象了
+REUSE from task 0        REUSE from task 0        REUSE from task 0
+REUSE from task 0        REUSE from task 1        REUSE from task 0
+REUSE from task 0        REUSE from task 1        REUSE from task 0
+REUSE from task 0        REUSE from task 2        REUSE from task 0
+最终的决策结果也还行，但是问题是task 0的采样仍然太多了
+而且task4根本就没采样出reuse task 3，这个就不是很好啊
+问题说明新的choise干不过之间的choise，考虑是不是要加一些引导进去？
+
+根本问题就是一个 采样不到更好的结果
+原因可能是之前任务遗留下来的局部性知识太多了
+也可能是新选择太过弱势了
+
+想到了一个更好点的reward  直接做比值就可了（acc/acc star）
+
+计算所有task的mean
+
+Dec21_15-49-02
+结果看起来还挺好的                       avg         reward
+1.000   0.000   0.000   0.000   0.000
+0.999   0.994   0.000   0.000   0.000             0.9995
+0.999   0.829   0.998   0.000   0.000   0.942     0.999/0.9995+0.829/0.9936)/2=0.9169
+0.937   0.541   0.845   0.998   0.000             0.776
+0.983   0.478   0.928   0.718   0.987   0.818     0.778
+
+best:
+0.9995  0.9936  0.9978  0.9979  0.9873
+
+REUSE from task 0        REUSE from task 0        REUSE from task 0
+REUSE from task 0        REUSE from task 1        REUSE from task 1
+REUSE from task 2        REUSE from task 1        REUSE from task 2
+REUSE from task 2        REUSE from task 2        REUSE from task 0
+采样过程也还是挺正常的
+最后一个task可以采样到new 和 各种reuse，
+所以这个应该是一个比较合适的reward设置
+
+打印值为：
+After task 4, task acc is 0.9868885526979324
+REUSE from task 2        REUSE from task 2        REUSE from task 0
+back eval acc s are [0.9825059101654846, 0.47845249755142016, 0.928495197438634, 0.7175226586102719]
+task respect best acc s:[0.9995271867612293, 0.9936336924583742, 0.9978655282817502, 0.9979859013091642]
+
+
+
+
+
+
+
+决定开大每个任务学习的step数量到100步（感觉应该不会好很多）
+
+这次结果就很迷惑了
+                                                    reward
+1.000   0.000   0.000   0.000   0.000
+0.999   0.994   0.000   0.000   0.000               0.9995
+0.859   0.774   0.997   0.000   0.000       0.88    0.859/0.9995+0.774/0.9936=0.8188
+0.873   0.735   0.557   0.997   0.000               0.7235
+0.642   0.401   0.920   0.888   0.987       0.76    0.7147
+
+REUSE from task 0        REUSE from task 0        REUSE from task 0
+NEW      NEW      NEW
+NEW      NEW      NEW
+NEW      NEW      NEW
+
+奇怪了 为什么采样出来是new啊
+best:
+0.9995  0.9936  0.9973  0.9969  0.9873
+奇怪啊，和50步的结果对比一下，在结果的第三行出，明显100步的选择了一个reward低的一个结果
+为什么会这样？？？
+
+出现这种情况推测只能是因为，
+第二个任务采样的时候，只能采样task0和new这两个了
+造成这样的原因是，第一个任务训练的太厉害了，并且在第一次训练new和reuse0其实都是得到了正反馈的
+所以new和reuse0都会提升
+
+所以我考虑设计一个tolerance，当ratio大于这个数值的时候才给予reward，否则就给予0
+实验：
+acc_drop = eval_back_acc / origin_acc
+acc_drop = max(acc_drop - 0.8, 0) * 5
+完全不work
+
+
+
+
+
+
+感觉还是没有抓住问题的实质：
+问题来源于哪里？就是因为当有了新的choice来了之后，新的choice无法得到采样
+就算得到采样了，因为旧的choice已经很稳固了，而且再次对旧的choice采样也会得到正的反馈，
+从而导致新的choice的reward无法与之抗衡，导致两者逐渐拉开差距
+
+但是我感觉这些问题to grow也会遇到啊，怎么回事？
+
+
+总计算空间是：
+pow(2,3) * pow(3,3) * pow(4,3) * pow(5,3) =
+8           27          64      125
+所以这个事情100步必然是能够学到最优解的
+
+
+
+现在仿照to grow里边的实验
+reuse之后就fix住 看看有什么不一样的结果

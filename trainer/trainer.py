@@ -30,17 +30,16 @@ class Trainer:
             print("Using %d GPUS for model" % torch.cuda.device_count())
             self.model = nn.DataParallel(self.model, device_ids=args.cuda_devices)
         self.data = data
-        self.params, self.params_name = [], []
+        self.params_name = []
         for name, param in self.model.named_parameters():
             if param.requires_grad:
-                self.params.append(param)
                 self.params_name.append(name)
-        self.optim = Adam(self.params, lr=args.lr, )
         self.task = task
         self.shuffle = args.shuffle
         self.epochs = args.epochs
         self.batch_size = args.batch_size
         self.loss_function = torch.nn.CrossEntropyLoss()
+        self.lr = args.lr
 
     def reload_checkpoint(self, dic):
         '''
@@ -49,6 +48,10 @@ class Trainer:
         :return: 
         '''
         dic = deepcopy(dic)
+
+        for key, value in dic.items():
+            if 'Stack' in key:
+                self.params_name.remove(key)  # reuse之后不再学习
         for key, value in self.model.state_dict().items():
             if key not in dic:
                 dic[key] = value
@@ -69,6 +72,12 @@ class Trainer:
         return acc_list
 
     def run(self):
+
+        params, params_name = [], []
+        for name, param in self.model.named_parameters():
+            if name in self.params_name:
+                params.append(param)
+        optim = Adam(params, lr=self.lr)
         current_train_data, curren_test_data = self.data[self.task]['train'], self.data[self.task]['test']
         best_acc = 0
         model_dict = None
@@ -87,9 +96,9 @@ class Trainer:
                 targets = current_train_data['y'][bs_idx].to(self.device)
                 output = self.model(images)
                 current_loss = self.loss_function(output[self.task], targets)
-                self.optim.zero_grad()
+                optim.zero_grad()
                 current_loss.backward()
-                self.optim.step()
+                optim.step()
 
                 if i // self.batch_size % self.eval_steps == 0:
                     self.model.eval()
