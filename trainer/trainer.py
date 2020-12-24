@@ -40,6 +40,7 @@ class Trainer:
         self.batch_size = args.batch_size
         self.loss_function = torch.nn.CrossEntropyLoss()
         self.lr = args.lr
+        self.args = args
 
     def reload_checkpoint(self, dic):
         '''
@@ -48,10 +49,10 @@ class Trainer:
         :return: 
         '''
         dic = deepcopy(dic)
-
-        for key, value in dic.items():
-            if 'Stack' in key:
-                self.params_name.remove(key)  # reuse之后不再学习
+        if self.args.reuse_fixed:
+            for key, value in dic.items():
+                if 'Stack' in key:
+                    self.params_name.remove(key)  # reuse之后不再学习
         for key, value in self.model.state_dict().items():
             if key not in dic:
                 dic[key] = value
@@ -71,7 +72,7 @@ class Trainer:
             acc_list.append(acc)
         return acc_list
 
-    def run(self):
+    def run(self, task_list=None):
 
         params, params_name = [], []
         for name, param in self.model.named_parameters():
@@ -79,7 +80,7 @@ class Trainer:
                 params.append(param)
         optim = Adam(params, lr=self.lr)
         current_train_data, curren_test_data = self.data[self.task]['train'], self.data[self.task]['test']
-        best_acc = 0
+        best_acc, best_avg_acc = 0, 0
         model_dict = None
         for epoch in range(self.epochs):
             self.model.train()
@@ -108,7 +109,18 @@ class Trainer:
                     predict = torch.argmax(F.softmax(logits, dim=-1), dim=-1)
                     v_targets, predict = v_targets.cpu(), predict.cpu()
                     acc = accuracy_score(v_targets, predict)
-                    if acc >= best_acc:
-                        best_acc = acc
-                        model_dict = self.model.state_dict()
+
+                    if self.args.back_eval and task_list:
+                        # 综合考虑回测acc和当前acc
+                        back_acc_list = self.history_eval(task_list)
+                        back_acc_list.append(acc)
+                        avg_acc = torch.mean(torch.tensor(back_acc_list))
+                        if avg_acc >= best_avg_acc:
+                            best_avg_acc = avg_acc
+                            best_acc = acc
+                            model_dict = self.model.state_dict()
+                    else:
+                        if acc >= best_acc:
+                            best_acc = acc
+                            model_dict = self.model.state_dict()
         return best_acc, model_dict

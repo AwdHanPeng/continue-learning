@@ -11,14 +11,6 @@ import numpy as np
 import random
 
 
-@attr.s
-class Opts:
-    dataset = attr.ib()
-    num_task = attr.ib()
-    num_class = attr.ib()
-    class_per_task = attr.ib()
-
-
 def setup_seed(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -27,20 +19,29 @@ def setup_seed(seed):
     torch.backends.cudnn.deterministic = True
 
 
+@attr.s
+class Opts:
+    dataset = attr.ib()
+    num_task = attr.ib()
+    num_class = attr.ib()
+    class_per_task = attr.ib()
+
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default='mnist', help="sparc or cosql")
-    parser.add_argument("--shuffle", type=bool, default=True, help="shuffle the train dataset")
+    parser.add_argument("--shuffle", type=bool, default=False, help="shuffle the train dataset")
 
     # controller opts
     parser.add_argument("--hidden", type=int, default=256, help="hidden size of rnn controller and embedding size")
     parser.add_argument("--n_layers", type=int, default=2, help="number of rnn layers")
 
     # controller model trains
-    parser.add_argument("--controller_steps", type=int, default=100, help="train steps for controller")
+    parser.add_argument("--controller_steps", type=int, default=50, help="train steps for controller")
     parser.add_argument("--controller_lr", type=float, default=1e-4, help="learning rate of adam")
-    parser.add_argument("--controller_logging_step", type=int, default=20, help="log after x steps")
+    parser.add_argument("--controller_logging_step", type=int, default=10, help="log after x steps")
+    parser.add_argument("--upper_bound", type=bool, default=False, help="find the upper bound")
 
     # base model opts
     parser.add_argument("--base", type=str, default='mlp', help="base model name")
@@ -53,11 +54,13 @@ if __name__ == '__main__':
 
     # base model train
     parser.add_argument("--eval_steps", type=int, default=50, help="train n step and eval")
-    parser.add_argument("--epochs", type=int, default=5, help="number of epochs")
+    parser.add_argument("--epochs", type=int, default=1, help="number of epochs")
     parser.add_argument("--batch_size", type=int, default=50, help="number of batch size")
     parser.add_argument("--lr", type=float, default=1e-3, help="learning rate of adam")
+    parser.add_argument("--reuse_fixed", type=bool, default=False,
+                        help="fix the last task's parm when reuse it in new task")
+    parser.add_argument("--back_eval", type=bool, default=True, help="back eval, then save checkpoint")
 
-    #
     parser.add_argument("--with_cuda", type=bool, default=True, help="")
     setup_seed(20)
     args = parser.parse_args()

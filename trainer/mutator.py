@@ -12,6 +12,7 @@ from .trainer import Trainer
 from models import MLP, Controller
 import datetime
 import math
+import itertools
 
 
 class Mutator:
@@ -71,41 +72,43 @@ class Mutator:
             sample_idx = torch.multinomial(F.softmax(logit, dim=-1), 1).view(-1)
             assert sample_idx < task * self.use_scope + 1
             step_probs.append(logit)
-            step_idx.append(sample_idx)
+            step_idx.append(sample_idx.item())
             step_losses.append(F.cross_entropy(logit.view(1, -1), sample_idx.view(-1)))
         step_losses = torch.stack(step_losses, dim=0)
         return step_probs, step_idx, torch.mean(step_losses)
 
     def crop_model(self, step_idx, default_config):
         def get_layer_dict(cur_model_dict, use_dict, layer):
-            '''
-            从一个模型的参数中，取出某一个层的参数
-            :param dic:
-            :param layer:
-            :return:
-            '''
+            # 从一个模型的参数中，取出某一个层的参数
             for key, value in use_dict.items():
-                if 'Stack{}'.format(layer) in key or 'classify' in key:
+                if 'Stack{}'.format(layer) in key:
+                    cur_model_dict[key] = value
+            return cur_model_dict
+
+        def init_dict(last_model_dict, cur_model_dict):
+            # 将最近的一层的classify继承下来
+            for key, value in last_model_dict.items():
+                if 'classify' in key:
                     cur_model_dict[key] = value
             return cur_model_dict
 
         cur_model_dict = dict()
+        cur_model_dict = init_dict(self.model_dict[-1], cur_model_dict)
+
         cur_model_config = []
         create_log = ''
         for layer, step in enumerate(step_idx):
             # 选择空间 [new, reuse 0, adapt 0, reuse 1, adapt1 ,.....]
-            step = step.item()
+            # step = step.item()
             if step == 0:
                 choice = 0
                 create_log += 'NEW      '.format(layer)
-
                 cur_model_config.append(default_config[layer])
             else:
                 task_num = (step - 1) // self.use_scope
                 choice = (step - 1) % self.use_scope + 1
                 use_dict = self.model_dict[task_num]
                 use_config = self.tasks_config[task_num]
-
                 if choice == 1:
                     create_log += 'REUSE from task {}        '.format(task_num)
                     cur_model_dict = get_layer_dict(cur_model_dict, use_dict, layer)
@@ -150,7 +153,6 @@ class Mutator:
         # alpha = max(alpha - 0.8, 0.0) * 5.0  # 尝试设置了一个tolerance
         reward = alpha
 
-        # 感觉惩罚的力度不够 可以考虑log函数
         self.tensorboard_writer.add_scalar('Reward/Sum', reward, self.iter)
         self.tensorboard_writer.add_scalar('Reward/Alpha', alpha, self.iter)
         self.tensorboard_writer.add_scalar('Reward/Beta', beta, self.iter)
@@ -185,40 +187,47 @@ class Mutator:
                 cur_acc_lis = []
                 cur_best_acc, cur_best_dic, cur_best_config, best_create_log = 0, None, None, None
                 report_back_acc_list = None
-                for steps in range(self.args.controller_steps):
-                    self.controller.train()
-                    step_probs, step_idx, sample_loss = self.controller_sample(task)
-                    assert len(self.model_dict) <= task
+                if self.args.upper_bound:
+                    valid_idx = list(range(task + 1))
+                    total_choice = list(itertools.product(valid_idx, repeat=self.args.mlp_linear))
+                    total_step = len(total_choice)
+                    print(total_step)
+                else:
+                    total_step = self.args.controller_steps
+                for steps in range(total_step):
+                    if not self.args.upper_bound:
+                        self.controller.train()
+                        step_probs, step_idx, sample_loss = self.controller_sample(task)
+                    else:
+                        step_idx = list(total_choice[steps])
                     cur_model_dict, cur_model_config, create_log = self.crop_model(step_idx, default_config)
                     cur_model = MLP(cur_model_config, self.args.mlp_size, self.opts)
                     trainer = Trainer(model=cur_model, task=task, args=self.args, data=self.data)
                     trainer.reload_checkpoint(cur_model_dict)
-                    cur_acc, cur_model_dic = trainer.run()
+                    cur_acc, cur_model_dic = trainer.run(task_list=list(range(0, task)))
                     cur_acc_lis.append(cur_acc)
                     back_acc_list = trainer.history_eval(task_list=list(range(0, task)))
                     reward = self.count_reward(cur_acc_lis, back_acc_list)
-
                     if steps % self.args.controller_logging_step == 0:
                         print('-------Logging at {} step for controller-------'.format(steps))
                         print(create_log)
-                        print('Reward:{}. task acc:{}.'.format(reward, cur_acc))
-                        print('Back eval acc s:{}'.format(back_acc_list))
+                        print('Reward:{}. '.format(reward))
                     if reward > best_reward:
-                        # 通过判断当前reward的情况 来决定是否存模型 而不是仅根据当前采样出来的子模型的acc来决定
                         best_reward = reward
                         cur_best_dic = cur_model_dic
                         cur_best_acc = cur_acc
                         cur_best_config = cur_model_config
                         report_back_acc_list = back_acc_list
                         best_create_log = create_log
-                    loss = sample_loss * reward
-                    loss.backward()
-                    self.controller_optim.step()
+                    if not self.args.upper_bound:
+                        loss = sample_loss * reward
+                        loss.backward()
+                        self.controller_optim.step()
+                    else:
+                        pass
                 print(
-                    '\033[95mAfter task {}, task acc is {}'.format(task, cur_best_acc))
+                    '\033[95mAfter task {}'.format(task))
                 print(best_create_log)
-                print('back eval acc s are {}'.format(report_back_acc_list))
-                print('task respect best acc s:{}\033[0m'.format(self.task_acc))
                 print('best reward :{}\033[0m'.format(best_reward))
                 self.tasks_config.append(cur_best_config)
                 self.task_acc.append(cur_best_acc)

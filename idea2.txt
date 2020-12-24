@@ -1,0 +1,83 @@
+2020/12/24
+尝试搜索一下upper bound
+实验方法：controller不训练，然后每个任务采样500次，那么得到的结果就约等于上界
+在做这个实验的时候  忘记把之前的代码注释掉了，之前写代码的时候，如果新任务reuse了之前的参数，这个参数就不会再学习了，也就不finetune
+
+
+所以我又补了一个实验：这次试验没有fix之前任务的参数，而是可以学习了
+
+
+tmux 6 fixed = false
+
+REUSE from task 0        REUSE from task 0        REUSE from task 0
+NEW      NEW      REUSE from task 1
+REUSE from task 0        REUSE from task 1        REUSE from task 1
+REUSE from task 0        REUSE from task 3        REUSE from task 0
+
+1.000   0.000   0.000   0.000   0.000
+0.950   0.995   0.000   0.000   0.000
+0.926   0.790   1.000   0.000   0.000
+0.925   0.651   0.652   0.999   0.000
+0.603   0.522   0.867   0.806   0.996
+avg = 0.7588
+
+
+
+
+
+
+
+tmux 7 fixed = true
+REUSE from task 0        REUSE from task 0        REUSE from task 0
+REUSE from task 0        REUSE from task 0        REUSE from task 1
+REUSE from task 0        REUSE from task 0        REUSE from task 2
+REUSE from task 0        REUSE from task 0        REUSE from task 3
+
+1.000   0.000   0.000   0.000   0.000
+0.999   0.833   0.000   0.000   0.000
+0.999   0.836   0.821   0.000   0.000
+0.999   0.836   0.823   0.942   0.000
+0.999   0.836   0.823   0.940   0.890
+avg = 0.8976
+
+
+
+
+
+
+
+
+
+
+---------------------------------------------------------
+之前做的一个实验
+
+REUSE from task 0        REUSE from task 0        REUSE from task 0
+REUSE from task 0        REUSE from task 1        REUSE from task 1
+REUSE from task 2        REUSE from task 1        REUSE from task 2
+REUSE from task 2        REUSE from task 2        REUSE from task 0
+1.000   0.000   0.000   0.000   0.000
+0.999   0.994   0.000   0.000   0.000
+0.999   0.829   0.998   0.000   0.000
+0.937   0.541   0.845   0.998   0.000
+0.983   0.478   0.928   0.718   0.987
+
+这个结果的参数：
+reuse not fix
+1epoch
+
+
+现在我进行暴力搜索，那么因为暴力搜索会搜到所有的可能情况，那么也就意味这上面的每一个选择我都会选到
+所以结果每层都要比这个好
+：（这可不一定，有可能暴力搜索的有一层比rl好，但是rl的下一层会变得比暴力的下一层要好），所以只有当暴力和rl的前述层
+是一样时，暴力的下一层才会比rl的更好
+
+
+
+
+
+
+
+
+
+
