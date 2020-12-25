@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.optim import Adam
+from torch.optim import Adam, SGD
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
@@ -78,7 +78,10 @@ class Trainer:
         for name, param in self.model.named_parameters():
             if name in self.params_name:
                 params.append(param)
-        optim = Adam(params, lr=self.lr)
+        if self.args.sgd:
+            optim = SGD(params, lr=self.lr)
+        else:
+            optim = Adam(params, lr=self.lr)
         current_train_data, curren_test_data = self.data[self.task]['train'], self.data[self.task]['test']
         best_acc, best_avg_acc = 0, 0
         model_dict = None

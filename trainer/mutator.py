@@ -13,6 +13,7 @@ from models import MLP, Controller
 import datetime
 import math
 import itertools
+import random
 
 
 class Mutator:
@@ -46,7 +47,7 @@ class Mutator:
 
     def run(self):
         if self.args.base == 'mlp':
-            report_final_eval_acc = self.run_mlp()
+            report_final_eval_acc, final_log, all_acc = self.run_mlp()
         else:
             raise NotImplemented
         print('Acc:')
@@ -55,6 +56,9 @@ class Mutator:
             for item in items:
                 s += '%.3f\t' % item
             print(s)
+        print(all_acc)
+        print(final_log)
+        print(self.args)
 
     def controller_sample(self, task):
         if self.args.base == 'mlp':
@@ -69,9 +73,12 @@ class Mutator:
         hidden = None
         for step in range(steps):
             logit, hidden = self.controller(input=sample_idx, task=task, hidden=hidden)
-            sample_idx = torch.multinomial(F.softmax(logit, dim=-1), 1).view(-1)
+            if self.args.greedy > 0 and random.random() < self.args.greedy:
+                sample_idx = torch.tensor(random.randint(0, task * self.use_scope)).to(self.device)
+            else:
+                sample_idx = torch.multinomial(F.softmax(logit, dim=-1), 1).view(-1)
             assert sample_idx < task * self.use_scope + 1
-            step_probs.append(logit)
+            step_probs.append(F.softmax(logit, dim=-1).tolist())
             step_idx.append(sample_idx.item())
             step_losses.append(F.cross_entropy(logit.view(1, -1), sample_idx.view(-1)))
         step_losses = torch.stack(step_losses, dim=0)
@@ -160,6 +167,7 @@ class Mutator:
         return reward.item()
 
     def run_mlp(self):
+        final_log = ''
         report_final_eval_acc = [[0.0] * self.opts.num_task for _ in range(self.opts.num_task)]
 
         if self.args.dataset == 'mnist':
@@ -185,21 +193,23 @@ class Mutator:
             else:
                 best_reward = float('-inf')
                 cur_acc_lis = []
-                cur_best_acc, cur_best_dic, cur_best_config, best_create_log = 0, None, None, None
+                cur_best_acc, cur_best_dic, cur_best_config, best_create_log, step_probs = 0, None, None, None, None
                 report_back_acc_list = None
                 if self.args.upper_bound:
                     valid_idx = list(range(task + 1))
-                    total_choice = list(itertools.product(valid_idx, repeat=self.args.mlp_linear))
+                    total_choice = list(itertools.product(valid_idx, repeat=self.args.mlp_linear)) * 5
                     total_step = len(total_choice)
-                    print(total_step)
+                elif self.args.base_model:
+                    total_choice = [[task] * self.args.mlp_linear]
+                    total_step = 1
                 else:
                     total_step = self.args.controller_steps
                 for steps in range(total_step):
-                    if not self.args.upper_bound:
+                    if self.args.upper_bound or self.args.base_model:
+                        step_idx = list(total_choice[steps])
+                    else:
                         self.controller.train()
                         step_probs, step_idx, sample_loss = self.controller_sample(task)
-                    else:
-                        step_idx = list(total_choice[steps])
                     cur_model_dict, cur_model_config, create_log = self.crop_model(step_idx, default_config)
                     cur_model = MLP(cur_model_config, self.args.mlp_size, self.opts)
                     trainer = Trainer(model=cur_model, task=task, args=self.args, data=self.data)
@@ -212,6 +222,9 @@ class Mutator:
                         print('-------Logging at {} step for controller-------'.format(steps))
                         print(create_log)
                         print('Reward:{}. '.format(reward))
+                        if step_probs:
+                            for step_prob in step_probs:
+                                print(step_prob)
                     if reward > best_reward:
                         best_reward = reward
                         cur_best_dic = cur_model_dic
@@ -219,18 +232,21 @@ class Mutator:
                         cur_best_config = cur_model_config
                         report_back_acc_list = back_acc_list
                         best_create_log = create_log
-                    if not self.args.upper_bound:
+                    if self.args.upper_bound or self.args.base_model:
+                        pass
+                    else:
                         loss = sample_loss * reward
                         loss.backward()
                         self.controller_optim.step()
-                    else:
-                        pass
                 print(
                     '\033[95mAfter task {}'.format(task))
                 print(best_create_log)
+                final_log = final_log + best_create_log + '\n'
                 print('best reward :{}\033[0m'.format(best_reward))
                 self.tasks_config.append(cur_best_config)
                 self.task_acc.append(cur_best_acc)
                 self.model_dict.append(cur_best_dic)
                 report_final_eval_acc[task][:len(report_back_acc_list) + 1] = report_back_acc_list + [cur_best_acc]
-        return report_final_eval_acc
+                if task == self.opts.num_task - 1:
+                    all_acc = torch.mean(torch.tensor(report_back_acc_list + [cur_best_acc])).item()
+        return report_final_eval_acc, final_log, all_acc
