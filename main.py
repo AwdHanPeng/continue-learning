@@ -44,9 +44,16 @@ if __name__ == '__main__':
     parser.add_argument("--upper_bound", type=bool, default=False, help="find the upper bound")
     parser.add_argument("--base_model", type=bool, default=False, help="always reuse last model dic")
     parser.add_argument("--greedy", type=float, default=0, help="<0.2 then random")
+    parser.add_argument("--random", type=bool, default=False, help="when a new task, random all controller param")
+    parser.add_argument("--gaussian", type=float, default=0, help="when a new task, add a gaussian noise")
+    parser.add_argument("--random_c", type=bool, default=False,
+                        help="when a new task, random classify param of controller")
+    parser.add_argument("--beta", type=bool, default=False,
+                        help="use beta reward")
     # base model opts
     parser.add_argument("--base", type=str, default='mlp', help="base model name")
     parser.add_argument("--adapt", type=bool, default=False, help="base model adapt")
+    parser.add_argument("--baseline", type=float, default=0, help="baseline for Reinforce")
 
     # mlp model opts
     parser.add_argument("--mlp_size", type=int, default=512, help="mlp dim in and out")
@@ -62,6 +69,11 @@ if __name__ == '__main__':
                         help="fix the last task's parm when reuse it in new task")
     parser.add_argument("--back_eval", type=bool, default=False, help="back eval, then save checkpoint")
     parser.add_argument("--sgd", type=bool, default=True, help="back eval, then save checkpoint")
+    parser.add_argument("--l2", type=bool, default=True, help="l2")
+    parser.add_argument("--l2_weight", type=float, default=0.05, help="l2 weight")
+    parser.add_argument("--clip", type=float, default=0.7, help="")
+    parser.add_argument("--lr_patience", type=int, default=1, help="")
+    parser.add_argument("--lr_factor", type=int, default=1, help="if lr factor=1, then this trigger will not work")
 
     parser.add_argument("--with_cuda", type=bool, default=True, help="")
     setup_seed(20)

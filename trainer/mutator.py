@@ -14,6 +14,7 @@ import datetime
 import math
 import itertools
 import random
+from copy import deepcopy
 
 
 class Mutator:
@@ -134,16 +135,16 @@ class Mutator:
         :return: 
         '''
         if len(cur_acc_lis) > 1:
-            beta = (cur_acc_lis[-1] - cur_acc_lis[-2]) / cur_acc_lis[-2]
+            beta = cur_acc_lis[-1] / max(cur_acc_lis[:-1])
         else:
             beta = 0
         alpha = []
         assert len(back_acc_list) == len(self.task_acc)
         # for origin_acc, eval_back_acc in zip(self.task_acc, back_acc_list):
-        #     # acc_drop = max(0, origin_acc - eval_back_acc)
-        #     acc_drop = origin_acc - eval_back_acc  # TODO, find better reward
+        #     acc_drop = max(0, origin_acc - eval_back_acc)
+        #     # acc_drop = origin_acc - eval_back_acc  # TODO, find better reward
         #     alpha.append(acc_drop / origin_acc)
-        noise = 0.001
+        # noise = 0.001
         # alpha = 1 / (torch.mean(torch.tensor(alpha)) + noise)
         # alpha = -1 * (torch.mean(torch.tensor(alpha))) #TODO, find better reward
         # alpha =  torch.sigmoid(-1 * (torch.mean(torch.tensor(alpha)))) - 0.5
@@ -157,13 +158,16 @@ class Mutator:
             acc_drop = eval_back_acc / origin_acc
             alpha.append(acc_drop)
         alpha = torch.mean(torch.tensor(alpha))
-        # alpha = max(alpha - 0.8, 0.0) * 5.0  # 尝试设置了一个tolerance
         reward = alpha
+        if self.args.beta:
+            reward += beta
 
         self.tensorboard_writer.add_scalar('Reward/Sum', reward, self.iter)
         self.tensorboard_writer.add_scalar('Reward/Alpha', alpha, self.iter)
         self.tensorboard_writer.add_scalar('Reward/Beta', beta, self.iter)
         self.iter += 1
+        if self.args.baseline > 0:
+            reward = reward - self.args.baseline
         return reward.item()
 
     def run_mlp(self):
@@ -179,8 +183,22 @@ class Mutator:
             raise NotImplemented
         default_config = [{'mlp': (input_feature, self.args.mlp_size)}] + [
             {'mlp': (self.args.mlp_size, self.args.mlp_size)}] * (self.args.mlp_linear - 1)
+        controller_dic = deepcopy(self.controller.state_dict())
         for task in range(self.opts.num_task):
             print('--------------Create Config and Dict for task {}--------------'.format(task))
+            if self.args.random:
+                self.controller.load_state_dict(deepcopy(controller_dic))
+            elif self.args.gaussian > 0:
+                temp = deepcopy(self.controller.state_dict())
+                for key, value in temp.items():
+                    temp[key] = value + torch.randn_like(value) * (self.args.gaussian ** 0.5)
+                self.controller.load_state_dict(temp)
+            elif self.args.random_c:
+                temp = deepcopy(self.controller.state_dict())
+                for key, value in temp.items():
+                    if 'choice' in key:
+                        temp[key] = controller_dic[key]
+                self.controller.load_state_dict(temp)
             if task == 0:
                 cur_model = MLP(default_config, self.args.mlp_size, self.opts)
                 trainer = Trainer(model=cur_model, task=task, args=self.args, data=self.data)

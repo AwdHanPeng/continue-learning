@@ -41,6 +41,9 @@ class Trainer:
         self.loss_function = torch.nn.CrossEntropyLoss()
         self.lr = args.lr
         self.args = args
+        self.previous_dic = dict()
+        self.lr_patience = args.lr_patience
+        self.lr_factor = args.lr_factor
 
     def reload_checkpoint(self, dic):
         '''
@@ -49,6 +52,7 @@ class Trainer:
         :return: 
         '''
         dic = deepcopy(dic)
+        self.previous_dic = deepcopy(dic)
         if self.args.reuse_fixed:
             for key, value in dic.items():
                 if 'Stack' in key:
@@ -72,16 +76,27 @@ class Trainer:
             acc_list.append(acc)
         return acc_list
 
-    def run(self, task_list=None):
+    def l2_loss(self):
+        loss_reg = 0
+        for key, value in self.previous_dic.items():
+            if 'Stack' in key:
+                loss_reg += torch.sum((value - self.model.state_dict(keep_vars=True)[key]).pow(2)) / 2
+        return loss_reg
 
-        params, params_name = [], []
-        for name, param in self.model.named_parameters():
-            if name in self.params_name:
-                params.append(param)
+    def get_optim(self, params):
         if self.args.sgd:
             optim = SGD(params, lr=self.lr)
         else:
             optim = Adam(params, lr=self.lr)
+        return optim
+
+    def run(self, task_list=None):
+        patience = self.lr_patience
+        params, params_name = [], []
+        for name, param in self.model.named_parameters():
+            if name in self.params_name:
+                params.append(param)
+        optim = self.get_optim(params)
         current_train_data, curren_test_data = self.data[self.task]['train'], self.data[self.task]['test']
         best_acc, best_avg_acc = 0, 0
         model_dict = None
@@ -100,8 +115,12 @@ class Trainer:
                 targets = current_train_data['y'][bs_idx].to(self.device)
                 output = self.model(images)
                 current_loss = self.loss_function(output[self.task], targets)
+                if self.args.l2:
+                    current_loss += self.l2_loss() * self.args.l2_weight
                 optim.zero_grad()
                 current_loss.backward()
+                if self.args.clip > 0:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip)
                 optim.step()
 
                 if i // self.batch_size % self.eval_steps == 0:
@@ -122,8 +141,20 @@ class Trainer:
                             best_avg_acc = avg_acc
                             best_acc = acc
                             model_dict = self.model.state_dict()
+                        else:
+                            patience -= 1
+                            if patience <= 0:
+                                self.lr /= self.lr_factor
+                                patience = self.lr_patience
+                                optim = self.get_optim(params)
                     else:
                         if acc >= best_acc:
                             best_acc = acc
                             model_dict = self.model.state_dict()
+                        else:
+                            patience -= 1
+                            if patience <= 0:
+                                self.lr /= self.lr_factor
+                                patience = self.lr_patience
+                                optim = self.get_optim(params)
         return best_acc, model_dict
