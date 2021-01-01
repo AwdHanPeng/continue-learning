@@ -25,7 +25,7 @@ class MLP(nn.Module):
 
         self.classify = nn.ModuleList(
             [nn.Linear(classify_in, opts.num_class // opts.num_task) for _ in range(opts.num_task)])
-        self.drop = torch.nn.Dropout(1e-5)
+        self.drop = torch.nn.Dropout(0.2)
 
     def forward(self, data):
         bs = data.shape[0]
@@ -35,5 +35,6 @@ class MLP(nn.Module):
             # x = self.drop(F.relu(layer(x)))  # add dropout
             x = F.relu(layer(x))
             # x = self.drop((layer(x)))  # add dropout
+        # x = self.drop(x)
         output = [task(x) for task in self.classify]
         return output

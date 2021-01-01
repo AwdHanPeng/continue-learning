@@ -32,7 +32,7 @@ class Mutator:
         self.args = args
         self.data = data
         self.opts = opts
-        self.controller = Controller(args=self.args, task_num=self.opts.num_task, adapt=self.args.adapt)
+        self.controller = Controller(args=self.args, task_num=self.opts.num_task)
         self.controller_optim = Adam(self.controller.parameters(), lr=args.controller_lr)
         cuda_condition = torch.cuda.is_available() and args.with_cuda
         self.device = torch.device("cuda" if cuda_condition else "cpu")
@@ -41,8 +41,10 @@ class Mutator:
         self.tasks_config = []
         self.task_acc = []
         self.model_dict = []
-        self.use_scope = 2 if self.args.adapt else 1
-
+        self.task_scope = 1  # =>reuse
+        self.general_scope = 1  # =>new
+        if self.args.adapt: self.task_scope += 1
+        if self.args.fuse: self.general_scope += 1
         self.tensorboard_writer = SummaryWriter()
         self.iter = 0
 
@@ -75,10 +77,11 @@ class Mutator:
         for step in range(steps):
             logit, hidden = self.controller(input=sample_idx, task=task, hidden=hidden)
             if self.args.greedy > 0 and random.random() < self.args.greedy:
-                sample_idx = torch.tensor(random.randint(0, task * self.use_scope)).to(self.device)
+                sample_idx = torch.tensor(random.randint(0, task * self.task_scope + self.general_scope - 1)).to(
+                    self.device)
             else:
                 sample_idx = torch.multinomial(F.softmax(logit, dim=-1), 1).view(-1)
-            assert sample_idx < task * self.use_scope + 1
+            assert sample_idx < task * self.task_scope + self.general_scope
             step_probs.append(F.softmax(logit, dim=-1).tolist())
             step_idx.append(sample_idx.item())
             step_losses.append(F.cross_entropy(logit.view(1, -1), sample_idx.view(-1)))
@@ -100,6 +103,19 @@ class Mutator:
                     cur_model_dict[key] = value
             return cur_model_dict
 
+        def fuse(cur_model_dict, layer):
+            temp = dict()
+            for use_dict in self.model_dict:
+                for key, value in use_dict.items():
+                    if 'Stack{}'.format(layer) in key:
+                        if key in temp.keys():
+                            temp[key].append(value)
+                        else:
+                            temp[key] = [value]
+            for key, value in temp.items():
+                cur_model_dict[key] = torch.mean(torch.stack(value, dim=0), dim=0)  # we assert all model shape equal
+            return cur_model_dict
+
         cur_model_dict = dict()
         cur_model_dict = init_dict(self.model_dict[-1], cur_model_dict)
 
@@ -108,20 +124,34 @@ class Mutator:
         for layer, step in enumerate(step_idx):
             # 选择空间 [new, reuse 0, adapt 0, reuse 1, adapt1 ,.....]
             # step = step.item()
+
             if step == 0:
-                choice = 0
                 create_log += 'NEW      '.format(layer)
                 cur_model_config.append(default_config[layer])
+            elif self.general_scope > 1 and step == self.general_scope - 1:
+                create_log += 'Fuse from task above        '.format(layer)
+                cur_model_config.append(default_config[layer])  # we assert all shape equal
+                cur_model_dict = fuse(cur_model_dict, layer)
             else:
-                task_num = (step - 1) // self.use_scope
-                choice = (step - 1) % self.use_scope + 1
+                '''
+                    test case1:
+                        general_scope=2 task_scope=1
+                        then  [0,1,2,3,4]
+                        we get[new,fuse,reuse0,reuse1,reuse2]
+                    test case2:
+                        general_scope=1 task_scope=1
+                        then  [0,1,2,3,4]
+                        we get[new,reuse0,reuse1,reuse2,reuse3]
+                '''
+                task_num = (step - self.general_scope) // self.task_scope
+                choice = (step - self.general_scope) % self.task_scope + 1  # adapt maybe wrong!
                 use_dict = self.model_dict[task_num]
                 use_config = self.tasks_config[task_num]
                 if choice == 1:
                     create_log += 'REUSE from task {}        '.format(task_num)
                     cur_model_dict = get_layer_dict(cur_model_dict, use_dict, layer)
                     cur_model_config.append(use_config[layer])
-                elif self.use_scope == 3 and choice == 2:
+                elif self.args.adapt and choice == 2:
                     create_log += 'ADAPT from task {}        '.format(task_num)
                     raise NotImplemented
         assert len(cur_model_config) == len(step_idx)
@@ -253,6 +283,7 @@ class Mutator:
                     if self.args.upper_bound or self.args.base_model:
                         pass
                     else:
+                        self.controller_optim.zero_grad()
                         loss = sample_loss * reward
                         loss.backward()
                         self.controller_optim.step()

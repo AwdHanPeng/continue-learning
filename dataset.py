@@ -14,6 +14,7 @@ def get_dataset(opts):
         with open(save_path, 'rb') as f:
             data = pkl.load(f)
             print('Load data from {}'.format(save_path))
+
             return data
 
     cifar10_norm = ((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
@@ -54,4 +55,5 @@ def get_dataset(opts):
     with open(save_path, 'wb') as f:
         pkl.dump(data, f)
         print('Save data into {}'.format(save_path))
+
     return data

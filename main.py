@@ -53,6 +53,7 @@ if __name__ == '__main__':
     # base model opts
     parser.add_argument("--base", type=str, default='mlp', help="base model name")
     parser.add_argument("--adapt", type=bool, default=False, help="base model adapt")
+    parser.add_argument("--fuse", type=bool, default=False, help="base model adapt")
     parser.add_argument("--baseline", type=float, default=0, help="baseline for Reinforce")
 
     # mlp model opts
@@ -74,10 +75,15 @@ if __name__ == '__main__':
     parser.add_argument("--clip", type=float, default=0.7, help="")
     parser.add_argument("--lr_patience", type=int, default=1, help="")
     parser.add_argument("--lr_factor", type=int, default=1, help="if lr factor=1, then this trigger will not work")
-
+    # dataset opts
+    parser.add_argument("--change", type=bool, default=False, help="replace task idx")
+    # general
     parser.add_argument("--with_cuda", type=bool, default=True, help="")
-    setup_seed(20)
+    parser.add_argument("--seed", type=bool, default=False, help="")
     args = parser.parse_args()
+    if args.seed:
+        setup_seed(20)
+
     if args.dataset == 'mnist':
         num_task = 5
         num_class = 10
@@ -87,12 +93,18 @@ if __name__ == '__main__':
         num_task = 5
         num_class = 10
         class_per_task = num_class // num_task
+
     else:
         raise NotImplemented
 
     opts = Opts(dataset=args.dataset, num_task=num_task, num_class=num_class, class_per_task=class_per_task)
     print("Loading {} Dataset".format(args.dataset))
     data = get_dataset(opts)
+    if args.change:
+        temp = data[2]
+        data[1] = data[3]
+        data[3] = temp
+
     print(args)
     mutator = Mutator(args, data, opts)
     mutator.run()

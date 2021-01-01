@@ -29,7 +29,7 @@ class StackedLSTMCell(nn.Module):
 
 
 class Controller(nn.Module):
-    def __init__(self, args, task_num, adapt=False):
+    def __init__(self, args, task_num, ):
         '''
         选择空间 [new, reuse 0, adapt 0, reuse 1, adapt1 ,.....]
         :param args: 
@@ -37,21 +37,20 @@ class Controller(nn.Module):
         :param adapt: 
         '''
         super().__init__()
-        if not adapt:
-            self.choice_num = (task_num - 1) * 1 + 1
-        else:
-            self.choice_num = (task_num - 1) * 2 + 1
-        self.adapt = adapt
+        self.args = args
+        self.task_scope = 1  # =>reuse
+        self.general_scope = 1  # =>new
+        if self.args.adapt: self.task_scope += 1
+        if self.args.fuse: self.general_scope += 1
+
+        self.choice_num = (task_num - 1) * self.task_scope + self.general_scope
         self.embedding = nn.Embedding(self.choice_num + 1, args.hidden)
         self.lstm = StackedLSTMCell(args.n_layers, args.hidden)
         self.choice = nn.Linear(args.hidden, self.choice_num)
 
     def create_mask(self, task):
         mask = [0] * self.choice_num
-        if self.adapt:
-            mask[:1 + task * 2] = [1] * (1 + task * 2)
-        else:
-            mask[:1 + task * 1] = [1] * (1 + task * 1)
+        mask[:self.general_scope + task * self.task_scope] = [1] * (self.general_scope + task * self.task_scope)
         assert len(mask) == self.choice_num
         return torch.tensor(mask)
 
