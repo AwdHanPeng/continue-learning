@@ -26,9 +26,6 @@ class Trainer:
         cuda_condition = torch.cuda.is_available() and args.with_cuda
         self.device = torch.device("cuda" if cuda_condition else "cpu")
         self.model = model.to(self.device)
-        if args.with_cuda and torch.cuda.device_count() > 1:
-            print("Using %d GPUS for model" % torch.cuda.device_count())
-            self.model = nn.DataParallel(self.model, device_ids=args.cuda_devices)
         self.data = data
         self.params_name = []
         for name, param in self.model.named_parameters():

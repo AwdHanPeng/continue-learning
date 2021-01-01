@@ -51,15 +51,20 @@ if __name__ == '__main__':
     parser.add_argument("--beta", type=bool, default=False,
                         help="use beta reward")
     # base model opts
-    parser.add_argument("--base", type=str, default='mlp', help="base model name")
-    parser.add_argument("--adapt", type=bool, default=False, help="base model adapt")
+    parser.add_argument("--base", type=str, default='cnn', help="base model name")
+    parser.add_argument("--adapt", type=bool, default=True, help="base model adapt")
     parser.add_argument("--fuse", type=bool, default=False, help="base model adapt")
     parser.add_argument("--baseline", type=float, default=0, help="baseline for Reinforce")
 
-    # mlp model opts
+    # mlp model opts  JUST WORK FOR MLP BASE MODEL
     parser.add_argument("--mlp_size", type=int, default=512, help="mlp dim in and out")
     parser.add_argument("--mlp_linear", type=int, default=3, help="number of mlp layers")
     parser.add_argument("--dropout", type=float, default=0.5, help="dropout prob")  # this opt does not work
+
+    # cnn model opts JUST WORK FOR CNN BASE MODEL
+    parser.add_argument("--cnn_linear_size", type=int, default=2048, help="feature extractor output size")
+    parser.add_argument("--cnn_cnn_linear", type=int, default=3, help="number of cnn layers of cnn model")
+    parser.add_argument("--cnn_mlp_linear", type=int, default=2, help="number of mlp layers of cnn model")
 
     # base model train
     parser.add_argument("--eval_steps", type=int, default=50, help="train n step and eval")
