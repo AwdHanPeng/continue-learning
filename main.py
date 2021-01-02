@@ -38,7 +38,7 @@ if __name__ == '__main__':
     parser.add_argument("--n_layers", type=int, default=2, help="number of rnn layers")
 
     # controller model trains
-    parser.add_argument("--controller_steps", type=int, default=50, help="train steps for controller")
+    parser.add_argument("--controller_steps", type=int, default=5, help="train steps for controller")
     parser.add_argument("--controller_lr", type=float, default=1e-4, help="learning rate of adam")
     parser.add_argument("--controller_logging_step", type=int, default=20, help="log after x steps")
     parser.add_argument("--upper_bound", type=bool, default=False, help="find the upper bound")
@@ -51,9 +51,9 @@ if __name__ == '__main__':
     parser.add_argument("--beta", type=bool, default=False,
                         help="use beta reward")
     # base model opts
-    parser.add_argument("--base", type=str, default='cnn', help="base model name")
-    parser.add_argument("--adapt", type=bool, default=True, help="base model adapt")
-    parser.add_argument("--fuse", type=bool, default=False, help="base model adapt")
+    parser.add_argument("--base", type=str, default='mlp', help="base model name")
+    parser.add_argument("--adapt", type=bool, default=False, help="base model adapt")
+    parser.add_argument("--fuse", type=bool, default=True, help="base model adapt")
     parser.add_argument("--baseline", type=float, default=0, help="baseline for Reinforce")
 
     # mlp model opts  JUST WORK FOR MLP BASE MODEL

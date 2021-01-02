@@ -87,12 +87,9 @@ class Mutator:
                     self.device)
                 if self.args.base == 'cnn':
                     raise NotImplemented  # greedy should fix with cnn model
-
             else:
                 sample_idx = torch.multinomial(F.softmax(logit, dim=-1), 1).view(-1)
-
                 if idx >= self.args.cnn_cnn_linear:
-
                     if sample_idx == 0:
                         pass
                     elif self.general_scope > 1 and step == self.general_scope - 1:
@@ -101,7 +98,7 @@ class Mutator:
                         if self.args.adapt:
                             while (sample_idx - self.general_scope) % self.task_scope + 1 == 2:
                                 sample_idx = torch.multinomial(F.softmax(logit, dim=-1), 1).view(-1)
-                            assert (sample_idx - self.general_scope) % self.task_scope != 2
+                            assert (sample_idx - self.general_scope) % self.task_scope +1 != 2
             assert sample_idx < task * self.task_scope + self.general_scope
             step_probs.append(F.softmax(logit, dim=-1).tolist())
             step_idx.append(sample_idx.item())
